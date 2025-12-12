@@ -6,7 +6,6 @@ import {
   UpdateDateColumn,
   OneToOne,
   JoinColumn,
-  OneToMany,
 } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 
@@ -31,11 +30,7 @@ export class Merchant {
   @Column({ unique: true })
   merchantCode: string;
 
- @Column({
-    type: 'enum',
-    enum: MerchantStatus,
-    default: MerchantStatus.PENDING
-    })
+  @Column({ type: 'enum', enum: MerchantStatus, default: MerchantStatus.PENDING })
   status: MerchantStatus;
 
   @Column({ type: 'jsonb' })
