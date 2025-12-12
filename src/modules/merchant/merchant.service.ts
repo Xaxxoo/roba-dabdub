@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as QRCode from 'qrcode';
@@ -6,12 +6,14 @@ import { Merchant, MerchantStatus } from './entities/merchant.entity';
 import { User } from '../auth/entities/user.entity';
 import { CreateMerchantDto } from './dto/create-merchant.dto';
 import { GenerateQRDto } from './dto/generate-qr.dto';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class MerchantService {
   constructor(
     @InjectRepository(Merchant)
     private merchantRepository: Repository<Merchant>,
+    private configService: ConfigService,
   ) {}
 
   async createMerchant(user: User, dto: CreateMerchantDto) {
@@ -54,9 +56,9 @@ export class MerchantService {
       currency: dto.currency,
       reference,
       description: dto.description,
-      apiEndpoint: `${process.env.API_URL || 'http://localhost:3000'}/api/v1/payment/initiate`,
+      apiEndpoint: `${this.configService.get('API_URL')}/api/v1/payment/initiate`,
       timestamp: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 min expiry
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
     };
 
     const qrDataString = JSON.stringify(paymentData);
