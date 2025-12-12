@@ -48,13 +48,13 @@ export class Transaction {
   amountCrypto: number;
 
   @Column()
-  cryptoToken: string; // USDT, USDC, etc.
+  cryptoToken: string;
 
   @Column('decimal', { precision: 18, scale: 2 })
   amountFiat: number;
 
   @Column()
-  fiatCurrency: string; // NGN
+  fiatCurrency: string;
 
   @Column('decimal', { precision: 10, scale: 6 })
   conversionRate: number;
