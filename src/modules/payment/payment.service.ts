@@ -22,13 +22,11 @@ export class PaymentService {
   ) {}
 
   async initiatePayment(user: User, dto: InitiatePaymentDto) {
-    // Find merchant
     const merchant = await this.merchantService.findByMerchantCode(dto.merchantCode);
     if (!merchant) {
       throw new NotFoundException('Merchant not found');
     }
 
-    // Check if reference already exists
     const existingTx = await this.transactionRepository.findOne({
       where: { reference: dto.reference },
     });
@@ -36,25 +34,23 @@ export class PaymentService {
       throw new BadRequestException('Reference already used');
     }
 
-    // Calculate crypto amount (assuming USDT/USDC = 1:1 with USD)
     const conversionRate = this.configService.get<number>('USD_TO_NGN_RATE', 1500);
     const spread = this.configService.get<number>('CONVERSION_SPREAD', 0.02);
     const effectiveRate = conversionRate * (1 + spread);
     const amountCrypto = dto.amount / effectiveRate;
 
-    // Create transaction
     const transaction = this.transactionRepository.create({
       reference: dto.reference,
       user,
       merchant,
       type: dto.type,
       amountCrypto,
-      cryptoToken: 'USDT', // Default to USDT
+      cryptoToken: 'USDT',
       amountFiat: dto.amount,
       fiatCurrency: dto.currency,
       conversionRate: effectiveRate,
       status: TransactionStatus.PENDING,
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000), // 15 min
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
       metadata: {
         description: dto.description,
       },
@@ -96,10 +92,8 @@ export class PaymentService {
       throw new BadRequestException('Transaction expired');
     }
 
-    // Update to processing
     transaction.status = TransactionStatus.PROCESSING;
     
-    // Store user operation data if provided (for account abstraction)
     if (dto.userOperation || dto.signature) {
       transaction.metadata = {
         ...transaction.metadata,
@@ -111,7 +105,6 @@ export class PaymentService {
     
     await this.transactionRepository.save(transaction);
 
-    // Add to payment processing queue
     await this.paymentQueue.add('process-payment', {
       transactionId: transaction.id,
       userOperation: dto.userOperation,
@@ -155,15 +148,6 @@ export class PaymentService {
     return this.transactionRepository.find({
       where: { user: { id: userId } },
       relations: ['merchant'],
-      order: { createdAt: 'DESC' },
-      take: limit,
-    });
-  }
-
-  async getMerchantTransactions(merchantId: string, limit = 50) {
-    return this.transactionRepository.find({
-      where: { merchant: { id: merchantId } },
-      relations: ['user'],
       order: { createdAt: 'DESC' },
       take: limit,
     });
