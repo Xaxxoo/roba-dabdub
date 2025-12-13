@@ -31,6 +31,9 @@ export class SettlementController {
   @ApiOperation({ summary: 'Get merchant settlement history' })
   async getMerchantSettlements(@Request() req) {
     const merchant = await this.merchantService.findByUser(req.user.id);
+    if (!merchant) {
+      throw new Error('Merchant not found');
+    }
     return this.settlementService.getMerchantSettlements(merchant.id);
   }
 

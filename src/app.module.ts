@@ -12,6 +12,11 @@ import { BlockchainModule } from './modules/blockchain/blockchain.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      envFilePath: [
+        '.env.local', 
+        '.env.development', 
+        '.env', 
+      ],
     }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
@@ -24,7 +29,7 @@ import { BlockchainModule } from './modules/blockchain/blockchain.module';
         database: config.get('DATABASE_NAME'),
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
         synchronize: config.get('NODE_ENV') === 'development',
-        logging: config.get('NODE_ENV') === 'development',
+        // logging: config.get('NODE_ENV') === 'development',
       }),
     }),
     BullModule.forRootAsync({

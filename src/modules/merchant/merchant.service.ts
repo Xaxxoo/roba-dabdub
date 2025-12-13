@@ -30,14 +30,14 @@ export class MerchantService {
     return this.merchantRepository.save(merchant);
   }
 
-  async findByUser(userId: string): Promise<Merchant> {
+  async findByUser(userId: string): Promise<Merchant | null> {
     return this.merchantRepository.findOne({
       where: { user: { id: userId } },
       relations: ['user'],
     });
   }
 
-  async findByMerchantCode(merchantCode: string): Promise<Merchant> {
+  async findByMerchantCode(merchantCode: string): Promise<Merchant | null> {
     return this.merchantRepository.findOne({
       where: { merchantCode },
       relations: ['user'],

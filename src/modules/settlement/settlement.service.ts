@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bull';
-import { Queue } from 'bull';
+import bull from 'bull';
 import { ConfigService } from '@nestjs/config';
 import { Settlement, SettlementStatus } from './entities/settlement.entity';
 import { Transaction } from '../payment/entities/transaction.entity';
@@ -17,7 +17,7 @@ export class SettlementService {
     private settlementRepository: Repository<Settlement>,
     private configService: ConfigService,
     @InjectQueue('fiat-settlement')
-    private settlementQueue: Queue,
+    private settlementQueue: bull.Queue,
   ) {}
 
   async initiateSettlement(transaction: Transaction) {
@@ -65,15 +65,15 @@ export class SettlementService {
       await this.settlementRepository.save(settlement);
 
       this.logger.log(`Settlement ${settlementId} completed successfully`);
-      
+
       return settlement;
     } catch (error) {
       this.logger.error(`Settlement failed: ${error.message}`);
-      
+
       settlement.status = SettlementStatus.FAILED;
       settlement.failureReason = error.message;
       settlement.retryCount += 1;
-      
+
       await this.settlementRepository.save(settlement);
 
       if (settlement.retryCount < 3) {
@@ -146,10 +146,13 @@ export class SettlementService {
 
   async handleWebhook(payload: any) {
     this.logger.log('Received settlement webhook', payload);
-    
-    if (payload.event === 'transfer.success' || payload.event === 'transfer.failed') {
+
+    if (
+      payload.event === 'transfer.success' ||
+      payload.event === 'transfer.failed'
+    ) {
       const reference = payload.data.reference;
-      
+
       const settlement = await this.settlementRepository.findOne({
         where: { settlementReference: reference },
       });
@@ -170,6 +173,9 @@ export class SettlementService {
   }
 
   private generateSettlementReference(): string {
-    return `SETTLE${Date.now()}${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    return `SETTLE${Date.now()}${Math.random()
+      .toString(36)
+      .substr(2, 9)
+      .toUpperCase()}`;
   }
 }

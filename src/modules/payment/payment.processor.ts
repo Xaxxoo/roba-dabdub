@@ -1,5 +1,5 @@
 import { Processor, Process } from '@nestjs/bull';
-import { Job } from 'bull';
+import bull from 'bull';
 import { Logger } from '@nestjs/common';
 import { PaymentService } from './payment.service';
 import { BlockchainService } from '../blockchain/blockchain.service';
@@ -17,7 +17,7 @@ export class PaymentProcessor {
   ) {}
 
   @Process('process-payment')
-  async handlePayment(job: Job) {
+  async handlePayment(job: bull.Job) {
     const { transactionId, userOperation, signature } = job.data;
     this.logger.log(`Processing payment for transaction: ${transactionId}`);
 

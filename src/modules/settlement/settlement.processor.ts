@@ -1,5 +1,5 @@
 import { Processor, Process } from '@nestjs/bull';
-import { Job } from 'bull';
+import bull from 'bull';
 import { Logger } from '@nestjs/common';
 import { SettlementService } from './settlement.service';
 import { PaymentService } from '../payment/payment.service';
@@ -15,7 +15,7 @@ export class SettlementProcessor {
   ) {}
 
   @Process('process-settlement')
-  async handleSettlement(job: Job) {
+  async handleSettlement(job: bull.Job) {
     const { settlementId } = job.data;
     this.logger.log(`Processing settlement: ${settlementId}`);
 
