@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { InjectQueue } from '@nestjs/bull';
-import { Queue } from 'bull';
+import bull from 'bull';
 import { ConfigService } from '@nestjs/config';
 import { Transaction, TransactionStatus, TransactionType } from './entities/transaction.entity';
 import { User } from '../auth/entities/user.entity';
@@ -18,7 +18,7 @@ export class PaymentService {
     private merchantService: MerchantService,
     private configService: ConfigService,
     @InjectQueue('payment-processing')
-    private paymentQueue: Queue,
+    private paymentQueue: bull.Queue,
   ) {}
 
   async initiatePayment(user: User, dto: InitiatePaymentDto) {
@@ -180,7 +180,7 @@ export class PaymentService {
     return this.transactionRepository.save(transaction);
   }
 
-  async findById(id: string): Promise<Transaction> {
+  async findById(id: string): Promise<Transaction | null> {
     return this.transactionRepository.findOne({
       where: { id },
       relations: ['user', 'merchant'],
