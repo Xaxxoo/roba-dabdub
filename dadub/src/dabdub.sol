@@ -15,9 +15,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 contract DabdDub is Ownable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
-    // ============================================================================
     // STATE VARIABLES
-    // ============================================================================
     
     IERC20 public immutable USDC;
     
@@ -66,9 +64,7 @@ contract DabdDub is Ownable, ReentrancyGuard, Pausable {
     // Chain-specific configurations for L2 support
     uint256 public immutable DEPLOYMENT_CHAIN_ID;
 
-    // ============================================================================
     // STRUCTS
-    // ============================================================================
     
     struct Payment {
         uint256 id;
@@ -89,9 +85,7 @@ contract DabdDub is Ownable, ReentrancyGuard, Pausable {
         uint256 newMaxFee;
     }
 
-    // ============================================================================
     // ENUMS
-    // ============================================================================
     
     enum PaymentType {
         P2P,           // Peer-to-peer (stays in contract)
@@ -104,9 +98,7 @@ contract DabdDub is Ownable, ReentrancyGuard, Pausable {
         FAILED
     }
 
-    // ============================================================================
     // EVENTS
-    // ============================================================================
     
     event Deposited(
         address indexed user,
@@ -189,9 +181,7 @@ contract DabdDub is Ownable, ReentrancyGuard, Pausable {
         uint256 timestamp
     );
 
-    // ============================================================================
     // ERRORS
-    // ============================================================================
     
     error InsufficientBalance(uint256 requested, uint256 available);
     error InvalidAmount();
@@ -209,9 +199,7 @@ contract DabdDub is Ownable, ReentrancyGuard, Pausable {
     error PaymentNotFound();
     error InvalidChainId();
 
-    // ============================================================================
     // CONSTRUCTOR
-    // ============================================================================
     
     /**
      * @notice Initializes the DabdDub contract
@@ -272,9 +260,7 @@ contract DabdDub is Ownable, ReentrancyGuard, Pausable {
         DEPLOYMENT_CHAIN_ID = block.chainid;
     }
 
-    // ============================================================================
     // DEPOSIT FUNCTIONS
-    // ============================================================================
     
     /**
      * @notice Deposit USDC into the contract
@@ -312,9 +298,7 @@ contract DabdDub is Ownable, ReentrancyGuard, Pausable {
         emit Deposited(user, amount, balances[user], block.timestamp);
     }
 
-    // ============================================================================
     // PAYMENT FUNCTIONS
-    // ============================================================================
     
     /**
      * @notice Transfer USDC to another user (peer-to-peer, stays in contract)
@@ -539,9 +523,7 @@ contract DabdDub is Ownable, ReentrancyGuard, Pausable {
         return paymentId;
     }
 
-    // ============================================================================
     // FEE CALCULATION
-    // ============================================================================
     
     /**
      * @notice Calculates the fee for a payment amount
@@ -571,9 +553,7 @@ contract DabdDub is Ownable, ReentrancyGuard, Pausable {
         }
     }
 
-    // ============================================================================
     // WITHDRAWAL FUNCTIONS
-    // ============================================================================
     
     /**
      * @notice Withdraw USDC from the contract with daily limits
@@ -703,9 +683,7 @@ contract DabdDub is Ownable, ReentrancyGuard, Pausable {
         return fiatSettlementWallets[randomIndex];
     }
 
-    // ============================================================================
     // VIEW FUNCTIONS
-    // ============================================================================
     
     /**
      * @notice Get the balance of a user
@@ -804,9 +782,7 @@ contract DabdDub is Ownable, ReentrancyGuard, Pausable {
         newMaxFee = pendingFeeChange.newMaxFee;
     }
 
-    // ============================================================================
     // ADMIN FUNCTIONS
-    // ============================================================================
     
     /**
      * @notice Update a settlement wallet
