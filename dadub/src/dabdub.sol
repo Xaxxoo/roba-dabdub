@@ -16,13 +16,11 @@ contract PaymentWallet is Ownable, ReentrancyGuard, Pausable {
     
     IERC20 public immutable USDC;
     address public platformWallet;
-    uint256 public platformFeeBps;
-    uint256 public constant MAX_FEE_BPS = 1000;
-    uint256 private constant BPS_DIVISOR = 10000;
+    uint256 public platformFee; // Fixed fee in USDC (with 6 decimals)
+    uint256 public constant MAX_FEE = 1_000_000; // Max $1 (1 USDC with 6 decimals)
     
     mapping(address => uint256) public balances;
     mapping(bytes32 => bool) public processedPayments;
-    mapping(address => uint256) public nonces;
     
     uint256 public totalBalance;
 
@@ -55,8 +53,8 @@ contract PaymentWallet is Ownable, ReentrancyGuard, Pausable {
     );
     
     event PlatformFeeUpdated(
-        uint256 oldFeeBps,
-        uint256 newFeeBps,
+        uint256 oldFee,
+        uint256 newFee,
         uint256 timestamp
     );
     
@@ -85,6 +83,7 @@ contract PaymentWallet is Ownable, ReentrancyGuard, Pausable {
     error PaymentAlreadyProcessed(bytes32 paymentReference);
     error InvalidFee();
     error SelfTransferNotAllowed();
+    error AmountTooSmall();
 
     // ============================================================================
     // CONSTRUCTOR
@@ -93,18 +92,18 @@ contract PaymentWallet is Ownable, ReentrancyGuard, Pausable {
     constructor(
         address _usdc,
         address _platformWallet,
-        uint256 _platformFeeBps
+        uint256 _platformFee
     ) Ownable(msg.sender) {
         if (_usdc == address(0) || _platformWallet == address(0)) {
             revert InvalidAddress();
         }
-        if (_platformFeeBps > MAX_FEE_BPS) {
+        if (_platformFee > MAX_FEE) {
             revert InvalidFee();
         }
         
         USDC = IERC20(_usdc);
         platformWallet = _platformWallet;
-        platformFeeBps = _platformFeeBps;
+        platformFee = _platformFee; // 200_000 = $0.2 (USDC has 6 decimals)
     }
 
     // ============================================================================
@@ -161,28 +160,30 @@ contract PaymentWallet is Ownable, ReentrancyGuard, Pausable {
             revert PaymentAlreadyProcessed(paymentReference);
         }
         
+        // Amount must be greater than the fee
+        if (amount <= platformFee) revert AmountTooSmall();
+        
         uint256 senderBalance = balances[from];
         if (senderBalance < amount) {
             revert InsufficientBalance(amount, senderBalance);
         }
         
-        uint256 fee = (amount * platformFeeBps) / BPS_DIVISOR;
-        uint256 amountAfterFee = amount - fee;
+        uint256 amountAfterFee = amount - platformFee;
         
         processedPayments[paymentReference] = true;
         
+        // Update balances
         balances[from] -= amount;
         balances[to] += amountAfterFee;
+        balances[platformWallet] += platformFee;
         
-        if (fee > 0) {
-            balances[platformWallet] += fee;
-        }
+        // Note: totalBalance remains unchanged because funds stay within the system
         
         emit PaymentProcessed(
             from,
             to,
             amount,
-            fee,
+            platformFee,
             paymentReference,
             paymentType,
             block.timestamp
@@ -202,6 +203,10 @@ contract PaymentWallet is Ownable, ReentrancyGuard, Pausable {
         whenNotPaused 
     {
         uint256 length = froms.length;
+        
+        // Check for empty batch
+        if (length == 0) revert InvalidAmount();
+        
         require(
             length == tos.length && 
             length == amounts.length && 
@@ -226,34 +231,38 @@ contract PaymentWallet is Ownable, ReentrancyGuard, Pausable {
                 revert PaymentAlreadyProcessed(paymentReference);
             }
             
+            // Amount must be greater than the fee
+            if (amount <= platformFee) revert AmountTooSmall();
+            
             uint256 senderBalance = balances[from];
             if (senderBalance < amount) {
                 revert InsufficientBalance(amount, senderBalance);
             }
             
-            uint256 fee = (amount * platformFeeBps) / BPS_DIVISOR;
-            uint256 amountAfterFee = amount - fee;
+            uint256 amountAfterFee = amount - platformFee;
             
             processedPayments[paymentReference] = true;
             
+            // Update balances
             balances[from] -= amount;
             balances[to] += amountAfterFee;
-            totalFees += fee;
+            totalFees += platformFee;
             
             emit PaymentProcessed(
                 from,
                 to,
                 amount,
-                fee,
+                platformFee,
                 paymentReference,
                 paymentType,
                 block.timestamp
             );
         }
         
-        if (totalFees > 0) {
-            balances[platformWallet] += totalFees;
-        }
+        // Update platform wallet balance once at the end (gas optimization)
+        balances[platformWallet] += totalFees;
+        
+        // Note: totalBalance remains unchanged because funds stay within the system
     }
 
     // ============================================================================
@@ -308,21 +317,21 @@ contract PaymentWallet is Ownable, ReentrancyGuard, Pausable {
         return USDC.balanceOf(address(this));
     }
     
-    function getNonce(address user) external view returns (uint256) {
-        return nonces[user];
+    function getPlatformFee() external view returns (uint256) {
+        return platformFee;
     }
 
     // ============================================================================
     // ADMIN FUNCTIONS
     // ============================================================================
     
-    function setPlatformFee(uint256 newFeeBps) external onlyOwner {
-        if (newFeeBps > MAX_FEE_BPS) revert InvalidFee();
+    function setPlatformFee(uint256 newFee) external onlyOwner {
+        if (newFee > MAX_FEE) revert InvalidFee();
         
-        uint256 oldFeeBps = platformFeeBps;
-        platformFeeBps = newFeeBps;
+        uint256 oldFee = platformFee;
+        platformFee = newFee;
         
-        emit PlatformFeeUpdated(oldFeeBps, newFeeBps, block.timestamp);
+        emit PlatformFeeUpdated(oldFee, newFee, block.timestamp);
     }
     
     function setPlatformWallet(address newPlatformWallet) external onlyOwner {
@@ -353,4 +362,4 @@ contract PaymentWallet is Ownable, ReentrancyGuard, Pausable {
         if (to == address(0)) revert InvalidAddress();
         IERC20(token).safeTransfer(to, amount);
     }
-} 
+}
