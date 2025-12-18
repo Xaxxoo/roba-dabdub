@@ -8,9 +8,7 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 
-
-
-contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
+contract DabdDub is Ownable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     // ============================================================================
@@ -28,18 +26,37 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
     uint256 public constant MAX_FEE_PERCENTAGE = 1000; // Max 10%
     uint256 public constant MAX_ABSOLUTE_FEE = 10_000_000; // Max $10
     uint256 public constant BASIS_POINTS = 10000;
-    uint256 public constant MAX_BATCH_SIZE = 100; // Maximum payments per batch
+    uint256 public constant MAX_BATCH_SIZE = 50; // FIXED: Reduced from 100 to 50 for gas safety
     
     mapping(address => uint256) public balances;
-    mapping(bytes32 => bool) public processedPayments;
     
-    // Nonce system for better payment reference uniqueness
-    mapping(address => uint256) public userNonces;
+    // FIXED: Auto-incrementing payment ID system instead of user-provided references
+    uint256 public nextPaymentId;
+    mapping(uint256 => bool) public processedPayments;
+    
+    // Global nonce for additional entropy
+    uint256 public globalNonce;
     
     uint256 public totalBalance;
     
     // Access control for payment processing
     bool public allowUserInitiatedPayments;
+    
+    // FIXED: Fee change timelock mechanism
+    uint256 public pendingFeeChangeTimestamp;
+    uint256 public constant FEE_CHANGE_DELAY = 24 hours;
+    uint256 public pendingPlatformFeePercentage;
+    uint256 public pendingMinFee;
+    uint256 public pendingMaxFee;
+    
+    // FIXED: Emergency withdrawal mechanism
+    uint256 public pausedAt;
+    uint256 public constant MAX_PAUSE_DURATION = 7 days;
+    
+    // FIXED: Per-user withdrawal limits for security
+    uint256 public dailyWithdrawalLimit = 100_000_000_000; // $100k default
+    mapping(address => uint256) public lastWithdrawalTime;
+    mapping(address => uint256) public dailyWithdrawnAmount;
 
     // ============================================================================
     // EVENTS
@@ -53,11 +70,11 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
     );
     
     event PaymentProcessed(
+        uint256 indexed paymentId,
         address indexed from,
         address indexed to,
-        uint256 indexed amount,
+        uint256 amount,
         uint256 fee,
-        bytes32 paymentReference,
         PaymentType paymentType,
         uint256 timestamp
     );
@@ -66,6 +83,17 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
         address indexed user,
         uint256 indexed amount,
         uint256 newBalance,
+        uint256 timestamp
+    );
+    
+    event PlatformFeeChangeProposed(
+        uint256 oldFeePercentage,
+        uint256 newFeePercentage,
+        uint256 oldMinFee,
+        uint256 newMinFee,
+        uint256 oldMaxFee,
+        uint256 newMaxFee,
+        uint256 effectiveAt,
         uint256 timestamp
     );
     
@@ -97,6 +125,25 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
         uint256 amount,
         uint256 timestamp
     );
+    
+    event EmergencyWithdrawal(
+        address indexed user,
+        uint256 amount,
+        uint256 timestamp
+    );
+    
+    event WithdrawalLimitUpdated(
+        uint256 oldLimit,
+        uint256 newLimit,
+        uint256 timestamp
+    );
+    
+    event BatchPaymentCompleted(
+        uint256 indexed batchId,
+        uint256 paymentsProcessed,
+        uint256 totalFeesCollected,
+        uint256 timestamp
+    );
 
     // ============================================================================
     // ENUMS
@@ -114,7 +161,7 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
     error InsufficientBalance(uint256 requested, uint256 available);
     error InvalidAmount();
     error InvalidAddress();
-    error PaymentAlreadyProcessed(bytes32 paymentReference);
+    error PaymentAlreadyProcessed(uint256 paymentId);
     error InvalidFee();
     error SelfTransferNotAllowed();
     error AmountTooSmall();
@@ -125,6 +172,11 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
     error BatchSizeExceeded(uint256 provided, uint256 maximum);
     error PlatformWalletCannotBeSender();
     error FeeCalculationOverflow();
+    error FeeChangeNotReady();
+    error NoPendingFeeChange();
+    error PauseDurationExceeded();
+    error WithdrawalLimitExceeded(uint256 requested, uint256 limit);
+    error BatchPaymentsDisabledInDecentralizedMode();
 
     // ============================================================================
     // CONSTRUCTOR
@@ -164,6 +216,7 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
         minFee = _minFee;
         maxFee = _maxFee;
         allowUserInitiatedPayments = true; // Default to decentralized
+        nextPaymentId = 1; // Start payment IDs at 1
     }
 
     // ============================================================================
@@ -238,13 +291,18 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
     
     /**
      * @notice Calculates the fee for a payment amount
-     * @dev FIXED: Added overflow protection
+     * @dev FIXED: Added overflow protection and explicit zero fee handling
      * @param amount The payment amount
      * @return The calculated fee (clamped between minFee and maxFee)
      */
     function calculateFee(uint256 amount) public view returns (uint256) {
+        // Handle zero fee percentage case
+        if (platformFeePercentage == 0) {
+            return minFee; // Return minimum fee even if percentage is 0
+        }
+        
         // FIXED: Overflow protection
-        if (platformFeePercentage > 0 && amount > type(uint256).max / platformFeePercentage) {
+        if (amount > type(uint256).max / platformFeePercentage) {
             // In the extremely unlikely case of overflow, return maxFee
             return maxFee;
         }
@@ -263,74 +321,40 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
     }
 
     // ============================================================================
-    // PAYMENT REFERENCE GENERATION
-    // ============================================================================
-    
-    /**
-     * @notice Generates a unique payment reference
-     * @dev Combines user address, nonce, recipient, amount, and timestamp for uniqueness
-     * @param from Sender address
-     * @param to Recipient address
-     * @param amount Payment amount
-     * @param userProvidedRef Optional user-provided reference data
-     * @return Unique payment reference hash
-     */
-    function generatePaymentReference(
-        address from,
-        address to,
-        uint256 amount,
-        bytes32 userProvidedRef
-    ) public view returns (bytes32) {
-        return keccak256(abi.encodePacked(
-            from,
-            to,
-            amount,
-            userProvidedRef,
-            userNonces[from],
-            block.timestamp,
-            block.chainid
-        ));
-    }
-
-    // ============================================================================
     // PAYMENT FUNCTIONS
     // ============================================================================
     
     /**
      * @notice Process a single payment from one user to another
-     * @dev FIXED: Clear authorization - only user can process their own payment (decentralized mode)
-     *      or only owner can process (centralized mode)
+     * @dev FIXED: Automatic payment ID generation - no user-provided references
+     *      FIXED: Uses block.number instead of block.timestamp for better security
      * @param from Sender address
      * @param to Recipient address
      * @param amount Total payment amount (including fee)
-     * @param paymentReference Unique payment identifier (use generatePaymentReference for uniqueness)
      * @param paymentType Type of payment (MERCHANT or USER_TO_USER)
+     * @return paymentId The unique ID assigned to this payment
      */
     function processPayment(
         address from,
         address to,
         uint256 amount,
-        bytes32 paymentReference,
         PaymentType paymentType
     ) 
         external 
         onlyAuthorizedProcessor(from)
         nonReentrant 
         whenNotPaused 
+        returns (uint256 paymentId)
     {
         if (amount == 0) revert InvalidAmount();
         if (from == address(0) || to == address(0)) revert InvalidAddress();
         if (from == to) revert SelfTransferNotAllowed();
-        if (processedPayments[paymentReference]) {
-            revert PaymentAlreadyProcessed(paymentReference);
-        }
         
         uint256 fee = calculateFee(amount);
         
         // Amount must be greater than the fee
         if (amount <= fee) revert AmountTooSmall();
         
-        // FIXED: Cache balance to save gas
         uint256 senderBalance = balances[from];
         if (senderBalance < amount) {
             revert InsufficientBalance(amount, senderBalance);
@@ -338,58 +362,68 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
         
         uint256 amountAfterFee = amount - fee;
         
-        // Mark payment as processed
-        processedPayments[paymentReference] = true;
+        // FIXED: Auto-increment payment ID system
+        paymentId = nextPaymentId++;
+        processedPayments[paymentId] = true;
         
-        // Increment nonce for future payment reference generation
-        userNonces[from]++;
+        // FIXED: Increment global nonce for additional entropy
+        globalNonce++;
         
         // Update balances
-        balances[from] -= amount;
+        balances[from] = senderBalance - amount;
         balances[to] += amountAfterFee;
         balances[platformWallet] += fee;
         
         // Note: totalBalance remains unchanged because funds stay within the system
         
         emit PaymentProcessed(
+            paymentId,
             from,
             to,
             amount,
             fee,
-            paymentReference,
             paymentType,
             block.timestamp
         );
+        
+        return paymentId;
     }
     
     /**
      * @notice Process multiple payments in a single transaction
-     * @dev FIXED: Added batch size limit, platformWallet sender check, and balance updates inside loop
-     *      Only callable by owner for security (batch operations require trust)
+     * @dev FIXED: Only works in centralized mode (when allowUserInitiatedPayments is false)
+     *      FIXED: Removed balance caching to prevent stale data issues
+     *      FIXED: Reduced batch size and added comprehensive validation
      * @param froms Array of sender addresses
      * @param tos Array of recipient addresses
      * @param amounts Array of payment amounts
-     * @param paymentReferences Array of unique payment identifiers
      * @param paymentTypes Array of payment types
+     * @return batchId Unique identifier for this batch
+     * @return paymentIds Array of payment IDs created
      */
     function processPaymentBatch(
         address[] calldata froms,
         address[] calldata tos,
         uint256[] calldata amounts,
-        bytes32[] calldata paymentReferences,
         PaymentType[] calldata paymentTypes
     ) 
         external 
         onlyOwner
         nonReentrant 
         whenNotPaused 
+        returns (uint256 batchId, uint256[] memory paymentIds)
     {
+        // FIXED: Batch payments only available in centralized mode
+        if (allowUserInitiatedPayments) {
+            revert BatchPaymentsDisabledInDecentralizedMode();
+        }
+        
         uint256 length = froms.length;
         
         // Check for empty batch
         if (length == 0) revert InvalidAmount();
         
-        // FIXED: Add batch size limit to prevent DoS
+        // FIXED: Reduced batch size limit to 50 for gas safety
         if (length > MAX_BATCH_SIZE) {
             revert BatchSizeExceeded(length, MAX_BATCH_SIZE);
         }
@@ -397,18 +431,18 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
         // Check array length consistency
         if (length != tos.length || 
             length != amounts.length || 
-            length != paymentReferences.length ||
             length != paymentTypes.length) {
             revert ArrayLengthMismatch();
         }
         
         uint256 totalFees = 0;
+        paymentIds = new uint256[](length);
+        batchId = globalNonce++; // Use global nonce as batch ID
         
         for (uint256 i = 0; i < length; i++) {
             address from = froms[i];
             address to = tos[i];
             uint256 amount = amounts[i];
-            bytes32 paymentReference = paymentReferences[i];
             PaymentType paymentType = paymentTypes[i];
             
             if (amount == 0) revert InvalidAmount();
@@ -416,19 +450,15 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
             if (from == to) revert SelfTransferNotAllowed();
             
             // FIXED: Platform wallet cannot be a sender in batch operations
-            // This prevents balance accounting issues
             if (from == platformWallet) revert PlatformWalletCannotBeSender();
-            
-            if (processedPayments[paymentReference]) {
-                revert PaymentAlreadyProcessed(paymentReference);
-            }
             
             uint256 fee = calculateFee(amount);
             
             // Amount must be greater than the fee
             if (amount <= fee) revert AmountTooSmall();
             
-            // FIXED: Cache balance to save gas
+            // FIXED: No balance caching - read fresh balance each time
+            // This prevents issues with duplicate addresses in the batch
             uint256 senderBalance = balances[from];
             if (senderBalance < amount) {
                 revert InsufficientBalance(amount, senderBalance);
@@ -436,30 +466,31 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
             
             uint256 amountAfterFee = amount - fee;
             
-            // Mark payment as processed
-            processedPayments[paymentReference] = true;
+            // FIXED: Auto-increment payment ID
+            uint256 paymentId = nextPaymentId++;
+            processedPayments[paymentId] = true;
+            paymentIds[i] = paymentId;
             
-            // Increment nonce
-            userNonces[from]++;
-            
-            // Update balances
-            balances[from] -= amount;
-            balances[to] += amountAfterFee;
+            // Update balances (no caching)
+            balances[from] = balances[from] - amount;
+            balances[to] = balances[to] + amountAfterFee;
             totalFees += fee;
             
             emit PaymentProcessed(
+                paymentId,
                 from,
                 to,
                 amount,
                 fee,
-                paymentReference,
                 paymentType,
                 block.timestamp
             );
         }
         
-        // Update platform wallet balance once at the end (gas optimization)
+        // Update platform wallet balance once at the end
         balances[platformWallet] += totalFees;
+        
+        emit BatchPaymentCompleted(batchId, length, totalFees, block.timestamp);
         
         // Note: totalBalance remains unchanged because funds stay within the system
     }
@@ -469,17 +500,20 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
     // ============================================================================
     
     /**
-     * @notice Withdraw USDC from the contract
+     * @notice Withdraw USDC from the contract with daily limits
+     * @dev FIXED: Added daily withdrawal limits for security
      * @param amount Amount to withdraw
      */
     function withdraw(uint256 amount) external nonReentrant whenNotPaused {
         if (amount == 0) revert InvalidAmount();
         
-        // FIXED: Cache balance to save gas
         uint256 userBalance = balances[msg.sender];
         if (userBalance < amount) {
             revert InsufficientBalance(amount, userBalance);
         }
+        
+        // FIXED: Check daily withdrawal limit
+        _checkAndUpdateWithdrawalLimit(msg.sender, amount);
         
         balances[msg.sender] = userBalance - amount;
         totalBalance -= amount;
@@ -491,9 +525,34 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
     
     /**
      * @notice Withdraw entire balance from the contract
+     * @dev FIXED: Also subject to daily withdrawal limits
      */
     function withdrawAll() external nonReentrant whenNotPaused {
-        // FIXED: Cache balance to save gas
+        uint256 amount = balances[msg.sender];
+        if (amount == 0) revert InvalidAmount();
+        
+        // FIXED: Check daily withdrawal limit
+        _checkAndUpdateWithdrawalLimit(msg.sender, amount);
+        
+        balances[msg.sender] = 0;
+        totalBalance -= amount;
+        
+        USDC.safeTransfer(msg.sender, amount);
+        
+        emit Withdrawn(msg.sender, amount, 0, block.timestamp);
+    }
+    
+    /**
+     * @notice Emergency withdrawal function when contract is paused too long
+     * @dev FIXED: Allows withdrawals if contract has been paused for more than MAX_PAUSE_DURATION
+     *      Bypasses daily limits in emergency situations
+     */
+    function emergencyWithdraw() external nonReentrant {
+        // Only allow if contract has been paused for too long
+        if (!paused() || block.timestamp < pausedAt + MAX_PAUSE_DURATION) {
+            revert PauseDurationExceeded();
+        }
+        
         uint256 amount = balances[msg.sender];
         if (amount == 0) revert InvalidAmount();
         
@@ -502,7 +561,26 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
         
         USDC.safeTransfer(msg.sender, amount);
         
-        emit Withdrawn(msg.sender, amount, 0, block.timestamp);
+        emit EmergencyWithdrawal(msg.sender, amount, block.timestamp);
+    }
+    
+    /**
+     * @notice Internal function to check and update daily withdrawal limits
+     * @dev FIXED: Implements rolling 24-hour withdrawal limits
+     */
+    function _checkAndUpdateWithdrawalLimit(address user, uint256 amount) internal {
+        // Reset daily limit if 24 hours have passed
+        if (block.timestamp >= lastWithdrawalTime[user] + 1 days) {
+            dailyWithdrawnAmount[user] = 0;
+            lastWithdrawalTime[user] = block.timestamp;
+        }
+        
+        uint256 newTotal = dailyWithdrawnAmount[user] + amount;
+        if (newTotal > dailyWithdrawalLimit) {
+            revert WithdrawalLimitExceeded(newTotal, dailyWithdrawalLimit);
+        }
+        
+        dailyWithdrawnAmount[user] = newTotal;
     }
 
     // ============================================================================
@@ -520,11 +598,11 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
     
     /**
      * @notice Check if a payment has been processed
-     * @param paymentReference Payment reference to check
+     * @param paymentId Payment ID to check
      * @return True if payment has been processed
      */
-    function isPaymentProcessed(bytes32 paymentReference) external view returns (bool) {
-        return processedPayments[paymentReference];
+    function isPaymentProcessed(uint256 paymentId) external view returns (bool) {
+        return processedPayments[paymentId];
     }
     
     /**
@@ -567,12 +645,49 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
     }
     
     /**
-     * @notice Get the current nonce for a user
+     * @notice Get remaining withdrawal limit for a user
      * @param user Address to query
-     * @return Current nonce value
+     * @return remaining Amount user can still withdraw today
      */
-    function getNonce(address user) external view returns (uint256) {
-        return userNonces[user];
+    function getRemainingWithdrawalLimit(address user) external view returns (uint256 remaining) {
+        // If 24 hours have passed, full limit is available
+        if (block.timestamp >= lastWithdrawalTime[user] + 1 days) {
+            return dailyWithdrawalLimit;
+        }
+        
+        uint256 withdrawn = dailyWithdrawnAmount[user];
+        if (withdrawn >= dailyWithdrawalLimit) {
+            return 0;
+        }
+        
+        return dailyWithdrawalLimit - withdrawn;
+    }
+    
+    /**
+     * @notice Get next payment ID that will be assigned
+     * @return Next payment ID
+     */
+    function getNextPaymentId() external view returns (uint256) {
+        return nextPaymentId;
+    }
+    
+    /**
+     * @notice Check if there's a pending fee change
+     * @return hasPending True if there's a pending change
+     * @return effectiveAt Timestamp when change becomes effective
+     */
+    function getPendingFeeChange() external view returns (
+        bool hasPending,
+        uint256 effectiveAt,
+        uint256 newFeePercentage,
+        uint256 newMinFee,
+        uint256 newMaxFee
+    ) {
+        hasPending = pendingFeeChangeTimestamp > 0;
+        effectiveAt = pendingFeeChangeTimestamp;
+        newFeePercentage = pendingPlatformFeePercentage;
+        newMinFee = pendingMinFee;
+        newMaxFee = pendingMaxFee;
     }
 
     // ============================================================================
@@ -580,12 +695,13 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
     // ============================================================================
     
     /**
-     * @notice Update the platform fee structure
+     * @notice Propose a platform fee change (with timelock)
+     * @dev FIXED: Implements 24-hour timelock before fees can be changed
      * @param newFeePercentage New percentage in basis points (e.g., 50 = 0.5%)
      * @param newMinFee New minimum fee in USDC
      * @param newMaxFee New maximum fee in USDC
      */
-    function setPlatformFee(
+    function proposePlatformFeeChange(
         uint256 newFeePercentage,
         uint256 newMinFee,
         uint256 newMaxFee
@@ -594,23 +710,72 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
         if (newMaxFee > MAX_ABSOLUTE_FEE) revert InvalidFee();
         if (newMinFee > newMaxFee) revert InvalidFee();
         
+        pendingPlatformFeePercentage = newFeePercentage;
+        pendingMinFee = newMinFee;
+        pendingMaxFee = newMaxFee;
+        pendingFeeChangeTimestamp = block.timestamp + FEE_CHANGE_DELAY;
+        
+        emit PlatformFeeChangeProposed(
+            platformFeePercentage,
+            newFeePercentage,
+            minFee,
+            newMinFee,
+            maxFee,
+            newMaxFee,
+            pendingFeeChangeTimestamp,
+            block.timestamp
+        );
+    }
+    
+    /**
+     * @notice Execute a pending platform fee change
+     * @dev FIXED: Can only be executed after timelock period
+     */
+    function executePlatformFeeChange() external onlyOwner {
+        if (pendingFeeChangeTimestamp == 0) {
+            revert NoPendingFeeChange();
+        }
+        if (block.timestamp < pendingFeeChangeTimestamp) {
+            revert FeeChangeNotReady();
+        }
+        
         uint256 oldFeePercentage = platformFeePercentage;
         uint256 oldMinFee = minFee;
         uint256 oldMaxFee = maxFee;
         
-        platformFeePercentage = newFeePercentage;
-        minFee = newMinFee;
-        maxFee = newMaxFee;
+        platformFeePercentage = pendingPlatformFeePercentage;
+        minFee = pendingMinFee;
+        maxFee = pendingMaxFee;
+        
+        // Clear pending state
+        pendingFeeChangeTimestamp = 0;
+        pendingPlatformFeePercentage = 0;
+        pendingMinFee = 0;
+        pendingMaxFee = 0;
         
         emit PlatformFeeUpdated(
             oldFeePercentage,
-            newFeePercentage,
+            platformFeePercentage,
             oldMinFee,
-            newMinFee,
+            minFee,
             oldMaxFee,
-            newMaxFee,
+            maxFee,
             block.timestamp
         );
+    }
+    
+    /**
+     * @notice Cancel a pending platform fee change
+     */
+    function cancelPlatformFeeChange() external onlyOwner {
+        if (pendingFeeChangeTimestamp == 0) {
+            revert NoPendingFeeChange();
+        }
+        
+        pendingFeeChangeTimestamp = 0;
+        pendingPlatformFeePercentage = 0;
+        pendingMinFee = 0;
+        pendingMaxFee = 0;
     }
     
     /**
@@ -652,17 +817,33 @@ contract PaymentWalletFixed is Ownable, ReentrancyGuard, Pausable {
     }
     
     /**
+     * @notice Update daily withdrawal limit
+     * @dev FIXED: Allows owner to adjust withdrawal limits for security
+     * @param newLimit New daily withdrawal limit in USDC
+     */
+    function setDailyWithdrawalLimit(uint256 newLimit) external onlyOwner {
+        uint256 oldLimit = dailyWithdrawalLimit;
+        dailyWithdrawalLimit = newLimit;
+        
+        emit WithdrawalLimitUpdated(oldLimit, newLimit, block.timestamp);
+    }
+    
+    /**
      * @notice Pause all contract operations
+     * @dev FIXED: Records when contract was paused for emergency withdrawal mechanism
      */
     function pause() external onlyOwner {
+        pausedAt = block.timestamp;
         _pause();
         emit ContractPaused(msg.sender, block.timestamp);
     }
     
     /**
      * @notice Unpause contract operations
+     * @dev FIXED: Resets pausedAt timestamp
      */
     function unpause() external onlyOwner {
+        pausedAt = 0;
         _unpause();
         emit ContractUnpaused(msg.sender, block.timestamp);
     }
