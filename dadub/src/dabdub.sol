@@ -634,9 +634,6 @@ contract DabdDub is Ownable, ReentrancyGuard, Pausable {
         dailyWithdrawnAmount[user] = newTotal;
     }
 
-    // ============================================================================
-    // RANDOMNESS FUNCTION
-    // ============================================================================
     
     /**
      * @notice Selects a random settlement wallet from the 5 available
@@ -661,12 +658,7 @@ contract DabdDub is Ownable, ReentrancyGuard, Pausable {
         
         return fiatSettlementWallets[randomIndex];
     }
-    
-    /**
-     * @notice Preview which settlement wallet would be selected (view function)
-     * @dev Useful for frontend/testing, but actual payment may select differently
-     * @return Wallet address that would currently be selected
-     */
+
     function previewRandomSettlementWallet() external view returns (address) {
         uint256 randomIndex = uint256(
             keccak256(
