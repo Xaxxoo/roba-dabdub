@@ -6,7 +6,7 @@
 
 ## 🎯 Overview
 
-CryptoSettle is a B2B2C payment settlement platform that enables businesses to accept cryptocurrency payments (USDC) from customers while receiving instant fiat settlements in their bank accounts. Built with multi-chain support across EVM and non-EVM networks, it abstracts away blockchain complexity for merchants while providing secure, compliant, and fast payment processing.
+DabDub is a B2B2C payment settlement platform that enables businesses to accept cryptocurrency payments (USDC) from customers while receiving instant fiat settlements in their bank accounts. Built with multi-chain support across EVM and non-EVM networks, it abstracts away blockchain complexity for merchants while providing secure, compliant, and fast payment processing.
 
 ### Key Value Propositions
 
