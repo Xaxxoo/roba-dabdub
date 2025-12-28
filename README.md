@@ -1,10 +1,8 @@
-# dabdub 
-
-# 🌍 DabDub - Universal Crypto-to-Fiat Settlement Infrastructure
+# DabDub - Universal Crypto-to-Fiat Settlement Infrastructure
 
 > **Seamless crypto payments, instant fiat settlements** - A multi-chain settlement infrastructure that bridges Web3 payments with traditional banking, enabling merchants to accept stablecoin payments and receive instant fiat settlements.
 
-## 🎯 Overview
+## Overview
 
 DabDub is a B2B2C payment settlement platform that enables businesses to accept cryptocurrency payments (USDC) from customers while receiving instant fiat settlements in their bank accounts. Built with multi-chain support across EVM and non-EVM networks, it abstracts away blockchain complexity for merchants while providing secure, compliant, and fast payment processing.
 
