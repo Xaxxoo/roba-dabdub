@@ -1,0 +1,9 @@
+{
+  "amoy": {
+    "chainId": 80002,
+    "vault": "0x3D391efD7a2112fa537E273aD3B2F21F14B57863",
+    "factory": "0xdeC9Da462AC872B148a44735FbB0364df4A8bb15",
+    "usdc": "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582",
+    "deployer": "0x5c24d44ea5c8324F71b5147D9AAc500a90526750"
+  }
+}
